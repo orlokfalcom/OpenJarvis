@@ -251,13 +251,16 @@ class AgentStreamBridge:
             # would not have the agent's system prompt, tool transcript, or
             # other internal context and could therefore contradict the
             # result reported by the agent events.  Replay the final content
-            # in chunks so the OpenAI-compatible streaming response stays
-            # consistent with the completed agent run.
+            # in small multi-word chunks to reduce per-chunk JSON/SSE overhead
+            # while preserving the completed agent response exactly.
             content = agent_result.content or ""
             if content:
                 words = content.split(" ")
-                for i, word in enumerate(words):
-                    token = word if i == 0 else " " + word
+                words_per_chunk = 4
+                for start in range(0, len(words), words_per_chunk):
+                    token = " ".join(words[start : start + words_per_chunk])
+                    if start:
+                        token = " " + token
                     chunk = ChatCompletionChunk(
                         id=self._chunk_id,
                         model=self._model,

@@ -30,6 +30,19 @@ def _streamed_content(events: list[str]) -> str:
     return "".join(content)
 
 
+def _content_chunk_count(events: list[str]) -> int:
+    """Count SSE chunks carrying assistant content."""
+    count = 0
+    for event in events:
+        if not event.startswith("data: {"):
+            continue
+        payload = json.loads(event.removeprefix("data: ").strip())
+        choices = payload.get("choices")
+        if choices and choices[0]["delta"].get("content"):
+            count += 1
+    return count
+
+
 def test_stream_replays_grounded_agent_result_without_second_inference():
     grounded_content = "My name is Jarvis. The tool reports 72 degrees."
     agent = MagicMock()
@@ -60,9 +73,30 @@ def test_stream_replays_grounded_agent_result_without_second_inference():
     events = asyncio.run(collect_events())
 
     assert _streamed_content(events) == grounded_content
+    assert _content_chunk_count(events) == 3
     assert any(event.startswith("event: tool_results\n") for event in events)
     agent.run.assert_called_once()
     assert agent._model == "configured-model"
+
+
+def test_stream_batches_words_without_changing_whitespace():
+    content = "alpha  beta gamma delta epsilon zeta eta theta iota"
+    agent = MagicMock()
+    agent._model = "model"
+    agent.run.return_value = AgentResult(content=content)
+    request = ChatCompletionRequest(
+        model="model",
+        messages=[{"role": "user", "content": "test"}],
+        stream=True,
+    )
+    bridge = AgentStreamBridge(agent, EventBus(), request.model, request)
+
+    async def collect_events() -> list[str]:
+        return [event async for event in bridge.stream()]
+
+    events = asyncio.run(collect_events())
+    assert _streamed_content(events) == content
+    assert _content_chunk_count(events) == 3
 
 
 def test_tool_call_start_serializes_arguments_for_sse_without_mutating_event():
